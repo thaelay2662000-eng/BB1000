@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="my">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Restaurant POS with Google Sheets</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pyidaungsu:wght@400;700&display=swap');
+        body { font-family: 'Pyidaungsu', sans-serif; }
+        
+        .notification { animation: slideDown 0.5s ease-out; }
+        @keyframes slideDown {
+            from { transform: translate(-50%, -100%); }
+            to { transform: translate(-50%, 1rem); }
+        }
+
+        .modal-bg { background-color: rgba(0,0,0,0.6); backdrop-filter: blur(2px); }
+        .scale-in { animation: scaleIn 0.2s ease-out; }
+        @keyframes scaleIn {
+            from { transform: scale(0.9); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        @media print {
+            body * { visibility: hidden; }
+            #invoice-print-area, #invoice-print-area * { visibility: visible; }
+            #invoice-print-area {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                margin: 0;
+                padding: 20px;
+                color: black !important;
+            }
+            .no-print { display: none !important; }
+        }
+
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #f97316;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-900 overflow-x-hidden">
+
+    <div id="app" class="min-h-screen max-w-4xl mx-auto shadow-2xl relative flex flex-col bg-white">
+        
+        <!-- Notification Area -->
+        <div id="notification-container" class="fixed top-4 left-1/2 -translate-x-1/2 z-[100] pointer-events-none w-full max-w-sm px-4 text-center"></div>
+
+        <!-- Header -->
+        <header class="p-4 border-b bg-white sticky top-0 z-30 flex items-center justify-between">
+            <h1 id="page-title" class="text-xl font-black text-orange-500">POS System</h1>
+            <button onclick="syncWithGoogleSheets()" class="p-2 rounded-xl bg-orange-50 text-orange-500 hover:bg-orange-100 transition-colors" title="Sync Menu">
+                <svg id="sync-icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+            </button>
+        </header>
+
+        <!-- Main Content -->
+        <main id="main-content" class="flex-1 pb-24">
+            <div class="flex items-center justify-center py-20">
+                <div class="loading-spinner mr-3"></div>
+                <span class="text-gray-400 font-bold">Data များ ရယူနေပါသည်...</span>
+            </div>
+        </main>
+
+        <!-- Table Action Modal -->
+        <div id="action-modal" class="hidden fixed inset-0 z-50 modal-bg flex items-center justify-center p-4">
+            <div class="bg-white rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl scale-in">
+                <div class="p-6 text-center border-b bg-gray-50">
+                    <h3 id="modal-table-id" class="text-2xl font-black text-gray-800">Table</h3>
+                    <div id="modal-table-status-badge" class="mt-2 inline-block px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider"></div>
+                </div>
+                <div id="order-summary-area" class="p-4 max-h-60 overflow-y-auto bg-white"></div>
+                <div class="p-4 space-y-2 bg-gray-50">
+                    <button onclick="handleAction('order')" class="w-full py-4 bg-orange-500 text-white font-bold rounded-2xl flex items-center justify-center gap-2 shadow-lg shadow-orange-100 active:scale-95 transition-transform">
+                        အော်ဒါထပ်မှာမယ်
+                    </button>
+                    <div id="checkout-btn-area"></div>
+                    <button onclick="closeModal()" class="w-full py-3 text-gray-400 font-medium hover:bg-white rounded-xl transition-colors">ပိတ်မည်</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Invoice Modal -->
+        <div id="invoice-modal" class="hidden fixed inset-0 z-[70] modal-bg flex items-center justify-center p-4">
+            <div class="bg-white rounded-2xl w-full max-w-sm overflow-hidden shadow-2xl scale-in flex flex-col max-h-[90vh]">
+                <div id="invoice-print-area" class="p-8 bg-white overflow-y-auto flex-1">
+                    <div class="text-center mb-6">
+                        <h2 class="text-2xl font-black text-gray-800">စားသောက်ဆိုင် အမည်</h2>
+                        <p class="text-[10px] text-gray-500 uppercase tracking-widest mt-1">အမှတ် (၁၂၃)၊ လမ်းမတော်၊ ရန်ကုန်မြို့။</p>
+                        <p class="text-[10px] text-gray-500">ဖုန်း - ၀၉ ၁၂၃၄၅၆၇၈၉</p>
+                        <div class="border-b-2 border-gray-100 my-4"></div>
+                        <div class="flex justify-between text-[11px] font-bold text-gray-600">
+                            <span id="invoice-date">Date: --/--/----</span>
+                            <span id="invoice-table">Table: --</span>
+                        </div>
+                    </div>
+                    <div id="invoice-items" class="space-y-3 mb-6"></div>
+                    <div class="border-t-2 border-gray-100 pt-4 space-y-1">
+                        <div class="flex justify-between text-sm">
+                            <span class="text-gray-500">စုစုပေါင်း ကျသင့်ငွေ</span>
+                            <span id="invoice-subtotal" class="font-bold">0 Ks</span>
+                        </div>
+                        <div class="flex justify-between text-lg font-black border-t border-dashed mt-2 pt-2">
+                            <span>TOTAL</span>
+                            <span id="invoice-total" class="text-orange-600">0 Ks</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="p-4 bg-gray-50 border-t flex gap-2 no-print">
+                    <button onclick="closeInvoice()" class="flex-1 py-3 text-gray-500 font-bold bg-white border rounded-xl">ပြန်ထွက်မည်</button>
+                    <button onclick="printInvoice()" id="print-btn" class="flex-1 py-3 bg-orange-500 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2">
+                        Print / ငွေသိမ်းမည်
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Navigation -->
+        <nav class="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-4xl bg-white/80 backdrop-blur-md border-t flex justify-around p-3 pb-6 z-40">
+            <button onclick="router.navigate('tables')" id="nav-tables" class="flex flex-col items-center gap-1 text-orange-500 transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg>
+                <span class="text-[10px] font-bold">Tables</span>
+            </button>
+            <button onclick="router.navigate('kitchen')" id="nav-kitchen" class="flex flex-col items-center gap-1 text-gray-400 relative transition-colors">
+                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 13.87A4 4 0 0 1 7.41 6a5.11 5.11 0 0 1 10.58 0 4 4 0 0 1 1.41 7.87"/><path d="M7 16v4a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-4"/><path d="M11 20h2"/></svg>
+                <div id="kitchen-badge" class="hidden absolute -top-1 -right-2 bg-red-500 text-white text-[8px] w-4 h-4 rounded-full flex items-center justify-center font-bold border-2 border-white">0</div>
+                <span class="text-[10px] font-bold">Kitchen</span>
+            </button>
+        </nav>
+    </div>
+
+    <script>
+        /**
+         * IMPORTANT: Google Apps Script Web App URL
+         * ဤနေရာတွင် သင်၏ Google Apps Script URL ကို ထည့်ပေးပါ။
+         */
+        const scriptURL = 'https://script.google.com/macros/s/AKfycbxenBTeSLaSoYcP4UAK1vx3hXjpA6M_toiJxyVDcRdR0yfrMTlms5tEddOAHfNeS3MFjg/exec';
+
+        let state = {
+            currentView: 'tables',
+            selectedTable: null,
+            menu: [
+                { id: 1, name: "ထမင်းကြော်", price: 3500, category: "Food", image: "https://i.imgur.com/8LzP5X0.jpg" },
+                { id: 2, name: "ခေါက်ဆွဲကြော်", price: 3500, category: "Food", image: "https://i.imgur.com/u5XpG6z.jpg" },
+                { id: 3, name: "လက်ဖက်ရည်", price: 1500, category: "Drink", image: "https://i.imgur.com/vH6v9S3.jpg" }
+            ],
+            cart: [],
+            orders: []
+        };
+
+        // Sync with Google Sheets
+        async function syncWithGoogleSheets() {
+            if (!scriptURL.includes('https')) {
+                showNotification("Google App Script URL ထည့်ရန် လိုအပ်ပါသည်", "error");
+                return;
+            }
+
+            const icon = document.getElementById('sync-icon');
+            icon.classList.add('animate-spin');
+            
+            try {
+                const response = await fetch(`${scriptURL}?action=getMenu`);
+                const data = await response.json();
+                if (data && data.length > 0) {
+                    state.menu = data;
+                    showNotification("Menu Update လုပ်ပြီးပါပြီ");
+                    if (state.currentView === 'menu') renderMenu();
+                }
+            } catch (e) {
+                console.error(e);
+                showNotification("Sheet မှ Data ဆွဲ၍မရပါ", "error");
+            } finally {
+                icon.classList.remove('animate-spin');
+            }
+        }
+
+        // Export Order to Google Sheets
+        async function exportOrderToSheet(tableId, total, items) {
+            if (!scriptURL.includes('https')) return;
+
+            const orderData = {
+                action: 'addOrder',
+                date: new Date().toLocaleString(),
+                table: tableId,
+                items: JSON.stringify(items),
+                total: total
+            };
+
+            try {
+                await fetch(scriptURL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    cache: 'no-cache',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(orderData)
+                });
+            } catch (e) {
+                console.error("Export failed", e);
+            }
+        }
+
+        function showNotification(msg, type = "success") {
+            const container = document.getElementById('notification-container');
+            const toast = document.createElement('div');
+            const bgColor = type === 'error' ? 'bg-red-500' : (type === 'info' ? 'bg-blue-600' : 'bg-black');
+            toast.className = `${bgColor} text-white px-6 py-3 rounded-full shadow-2xl flex items-center justify-center gap-3 notification mb-2 pointer-events-auto mx-auto`;
+            toast.innerHTML = `<span class="font-bold text-sm">${msg}</span>`;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3000);
+        }
+
+        const router = {
+            navigate(view, params = {}) {
+                state.currentView = view;
+                if (params.tableId) state.selectedTable = params.tableId;
+                
+                document.getElementById('nav-tables').className = `flex flex-col items-center gap-1 ${view === 'tables' || view === 'menu' ? 'text-orange-500' : 'text-gray-400'}`;
+                document.getElementById('nav-kitchen').className = `flex flex-col items-center gap-1 ${view === 'kitchen' ? 'text-orange-500' : 'text-gray-400'}`;
+
+                const main = document.getElementById('main-content');
+                const title = document.getElementById('page-title');
+
+                if (view === 'tables') {
+                    title.innerHTML = 'Table ရွေးပါ';
+                    renderTables();
+                } else if (view === 'menu') {
+                    title.innerHTML = `Table ${state.selectedTable}`;
+                    renderMenu();
+                } else if (view === 'kitchen') {
+                    title.innerHTML = 'Kitchen Orders';
+                    renderKitchen();
+                }
+            }
+        };
+
+        function renderTables() {
+            const main = document.getElementById('main-content');
+            let html = `<div class="grid grid-cols-4 gap-3 p-4">`;
+            for (let i = 1; i <= 20; i++) {
+                const activeOrders = state.orders.filter(o => o.tableId === i && o.status !== 'ရှင်းပြီး');
+                const isBusy = activeOrders.length > 0;
+                const itemCount = activeOrders.reduce((sum, o) => sum + o.items.filter(it => !it.isDone).reduce((s, it) => s + it.qty, 0), 0);
+                const colorClass = isBusy ? 'bg-red-500 border-red-600' : 'bg-green-500 border-green-600';
+                
+                html += `
+                    <button onclick="openModal(${i})" class="h-24 rounded-2xl flex flex-col items-center justify-center border-b-4 text-white relative shadow-lg ${colorClass}">
+                        ${isBusy && itemCount > 0 ? `<span class="absolute -top-1 -right-1 bg-white text-red-500 w-5 h-5 rounded-full text-[10px] flex items-center justify-center font-bold border border-red-200">${itemCount}</span>` : ''}
+                        <span class="text-3xl font-black">${i}</span>
+                    </button>`;
+            }
+            html += `</div>`;
+            main.innerHTML = html;
+        }
+
+        window.openModal = (id) => {
+            state.selectedTable = id;
+            const activeOrders = state.orders.filter(o => o.tableId === id && o.status !== 'ရှင်းပြီး');
+            const isBusy = activeOrders.length > 0;
+            document.getElementById('modal-table-id').innerText = `Table ${id}`;
+            const summaryArea = document.getElementById('order-summary-area');
+            
+            if (isBusy) {
+                let total = 0;
+                let itemsHtml = `<div class="space-y-3">`;
+                const combinedItems = getCombinedItems(activeOrders);
+                Object.values(combinedItems).forEach(item => {
+                    total += (item.price * item.qty);
+                    itemsHtml += `<div class="flex justify-between text-sm"><span>${item.name} (${item.qty})</span><span class="font-bold">${item.price * item.qty} Ks</span></div>`;
+                });
+                itemsHtml += `<div class="pt-3 border-t font-black flex justify-between"><span>TOTAL</span><span class="text-orange-600">${total} Ks</span></div></div>`;
+                summaryArea.innerHTML = itemsHtml;
+            } else {
+                summaryArea.innerHTML = `<p class="text-center py-4 text-gray-300">ဟင်းပွဲမရှိသေးပါ။</p>`;
+            }
+
+            const checkoutArea = document.getElementById('checkout-btn-area');
+            checkoutArea.innerHTML = isBusy ? `<button onclick="handleAction('checkout')" class="w-full py-4 bg-green-500 text-white font-bold rounded-2xl">ငွေရှင်းမည်</button>` : '';
+            document.getElementById('action-modal').classList.remove('hidden');
+        };
+
+        function getCombinedItems(activeOrders) {
+            const combinedItems = {};
+            activeOrders.forEach(order => {
+                order.items.forEach(item => {
+                    if (combinedItems[item.id]) combinedItems[item.id].qty += item.qty;
+                    else combinedItems[item.id] = { ...item };
+                });
+            });
+            return combinedItems;
+        }
+
+        window.closeModal = () => document.getElementById('action-modal').classList.add('hidden');
+
+        window.handleAction = (action) => {
+            const tableId = state.selectedTable;
+            closeModal();
+            if (action === 'order') router.navigate('menu', { tableId });
+            else if (action === 'checkout') showInvoice(tableId);
+        };
+
+        function showInvoice(tableId) {
+            const activeOrders = state.orders.filter(o => o.tableId === tableId && o.status !== 'ရှင်းပြီး');
+            const combinedItems = getCombinedItems(activeOrders);
+            document.getElementById('invoice-date').innerText = `Date: ${new Date().toLocaleDateString()}`;
+            document.getElementById('invoice-table').innerText = `Table: ${tableId}`;
+            let total = 0;
+            const itemsArea = document.getElementById('invoice-items');
+            itemsArea.innerHTML = Object.values(combinedItems).map(item => {
+                total += (item.price * item.qty);
+                return `<div class="flex justify-between text-xs font-bold"><span>${item.name} (x${item.qty})</span><span>${item.price * item.qty} Ks</span></div>`;
+            }).join('');
+            document.getElementById('invoice-total').innerText = `${total.toLocaleString()} Ks`;
+            document.getElementById('invoice-subtotal').innerText = `${total.toLocaleString()} Ks`;
+            document.getElementById('invoice-modal').classList.remove('hidden');
+        }
+
+        window.closeInvoice = () => document.getElementById('invoice-modal').classList.add('hidden');
+
+        window.printInvoice = async () => {
+            const printBtn = document.getElementById('print-btn');
+            printBtn.disabled = true;
+            printBtn.innerHTML = "Saving to Sheet...";
+
+            const tableId = state.selectedTable;
+            const activeOrders = state.orders.filter(o => o.tableId === tableId && o.status !== 'ရှင်းပြီး');
+            const combinedItems = getCombinedItems(activeOrders);
+            const total = Object.values(combinedItems).reduce((s, i) => s + (i.price * i.qty), 0);
+            
+            // Export data
+            await exportOrderToSheet(tableId, total, Object.values(combinedItems));
+            
+            window.print();
+            activeOrders.forEach(o => o.status = 'ရှင်းပြီး');
+            closeInvoice();
+            showNotification(`ငွေရှင်းပြီး Sheet ထဲသို့ ဒေတာပို့လိုက်ပါပြီ။`);
+            renderTables();
+            
+            printBtn.disabled = false;
+            printBtn.innerHTML = "Print / ငွေသိမ်းမည်";
+        };
+
+        function renderMenu() {
+            const main = document.getElementById('main-content');
+            let html = `<div class="p-4 grid grid-cols-2 gap-4 pb-48">`;
+            state.menu.forEach(item => {
+                html += `
+                <div class="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 p-2">
+                    <img src="${item.image}" class="h-24 w-full object-cover rounded-xl mb-2" onerror="this.src='https://via.placeholder.com/150'">
+                    <h3 class="font-bold text-xs truncate">${item.name}</h3>
+                    <p class="text-orange-600 font-black text-sm">${item.price} Ks</p>
+                    <button onclick="addToCart(${item.id})" class="w-full mt-2 bg-orange-50 text-orange-600 py-1 rounded-lg font-bold text-[10px]">+ ထည့်မည်</button>
+                </div>`;
+            });
+            html += `</div>`;
+            if (state.cart.length > 0) {
+                const total = state.cart.reduce((s, i) => s + (i.price * i.qty), 0);
+                html += `<div class="fixed bottom-20 left-1/2 -translate-x-1/2 w-full max-w-4xl bg-white border-t p-4 shadow-2xl z-50">
+                    <button onclick="placeOrder()" class="w-full bg-orange-500 text-white py-4 rounded-2xl font-black uppercase tracking-wider shadow-lg">
+                        အော်ဒါတင်မည် - ${total.toLocaleString()} Ks
+                    </button>
+                </div>`;
+            }
+            main.innerHTML = html;
+        }
+
+        function renderKitchen() {
+            const main = document.getElementById('main-content');
+            const actives = state.orders.filter(o => o.status !== 'ရှင်းပြီး' && !o.items.every(it => it.isDone));
+            if (actives.length === 0) {
+                main.innerHTML = `<div class="flex flex-col items-center justify-center py-32 text-gray-300 italic">အော်ဒါမရှိပါ။</div>`;
+                return;
+            }
+            let html = `<div class="p-4 grid gap-4">`;
+            actives.forEach(order => {
+                html += `
+                <div class="bg-white rounded-2xl border border-gray-100 p-5 shadow-sm">
+                    <h4 class="font-black text-xl mb-3">Table ${order.tableId} <span class="text-xs text-gray-300 font-normal ml-2">${order.time}</span></h4>
+                    <div class="space-y-3">
+                        ${order.items.map((item, idx) => `
+                            <div class="flex items-center justify-between ${item.isDone ? 'opacity-30 line-through' : ''}">
+                                <div class="font-bold text-sm"><span class="text-orange-500 mr-2">${item.qty}x</span> ${item.name}</div>
+                                ${!item.isDone ? `<button onclick="markItemDone(${order.id}, ${idx})" class="bg-green-500 text-white px-4 py-1 rounded-full text-[10px] font-bold">DONE</button>` : '✅'}
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>`;
+            });
+            html += `</div>`;
+            main.innerHTML = html;
+        }
+
+        window.markItemDone = (orderId, itemIdx) => {
+            const order = state.orders.find(o => o.id === orderId);
+            order.items[itemIdx].isDone = true;
+            updateKitchenBadge();
+            renderKitchen();
+        };
+
+        window.addToCart = (id) => {
+            const item = state.menu.find(m => m.id === id);
+            const exists = state.cart.find(c => c.id === id);
+            if (exists) exists.qty++;
+            else state.cart.push({ ...item, qty: 1, isDone: false });
+            renderMenu();
+        };
+
+        window.placeOrder = () => {
+            state.orders.push({
+                id: Date.now(),
+                tableId: state.selectedTable,
+                items: state.cart.map(i => ({ ...i })),
+                status: 'ချက်ပြုတ်နေသည်',
+                time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            });
+            state.cart = [];
+            showNotification(`Table ${state.selectedTable} အော်ဒါ ပို့ပြီးပါပြီ`);
+            updateKitchenBadge();
+            router.navigate('tables');
+        };
+
+        function updateKitchenBadge() {
+            const count = state.orders.filter(o => o.status !== 'ရှင်းပြီး' && !o.items.every(it => it.isDone)).length;
+            const badge = document.getElementById('kitchen-badge');
+            badge.innerText = count;
+            badge.className = count > 0 ? "absolute -top-1 -right-2 bg-red-500 text-white text-[8px] w-4 h-4 rounded-full flex items-center justify-center font-bold border-2 border-white" : "hidden";
+        }
+
+        window.onload = () => {
+            syncWithGoogleSheets();
+            router.navigate('tables');
+        };
+    </script>
+</body>
+</html>
+
+/* -------------------------------------------------------------
+  GOOGLE APPS SCRIPT CODE (Paste this in Apps Script Editor)
+  -------------------------------------------------------------
+
+  function doGet(e) {
+    var action = e.parameter.action;
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    
+    if (action == 'getMenu') {
+      var sheet = ss.getSheetByName('Menu') || ss.insertSheet('Menu');
+      if (sheet.getLastRow() < 1) {
+        // Sample header if empty
+        sheet.appendRow(['id', 'name', 'price', 'category', 'image']);
+      }
+      var data = sheet.getDataRange().getValues();
+      var headers = data.shift();
+      var result = data.map(function(row) {
+        var obj = {};
+        headers.forEach(function(h, i) { obj[h] = row[i]; });
+        return obj;
+      });
+      return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
+  function doPost(e) {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var data = JSON.parse(e.postData.contents);
+    
+    if (data.action == 'addOrder') {
+      var sheet = ss.getSheetByName('Orders') || ss.insertSheet('Orders');
+      if (sheet.getLastRow() < 1) {
+        sheet.appendRow(['Date', 'Table', 'Items', 'Total']);
+      }
+      sheet.appendRow([data.date, data.table, data.items, data.total]);
+      return ContentService.createTextOutput("Success");
+    }
+  }
+*/
