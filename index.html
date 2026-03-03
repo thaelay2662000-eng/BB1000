@@ -141,31 +141,21 @@
     <script>
         /**
          * IMPORTANT: Google Apps Script Web App URL
-         * ဤနေရာတွင် သင်၏ Google Apps Script URL ကို ထည့်ပေးပါ။
          */
         const scriptURL = 'https://script.google.com/macros/s/AKfycbxenBTeSLaSoYcP4UAK1vx3hXjpA6M_toiJxyVDcRdR0yfrMTlms5tEddOAHfNeS3MFjg/exec';
 
         let state = {
             currentView: 'tables',
             selectedTable: null,
-            menu: [
-                { id: 1, name: "ထမင်းကြော်", price: 3500, category: "Food", image: "https://i.imgur.com/8LzP5X0.jpg" },
-                { id: 2, name: "ခေါက်ဆွဲကြော်", price: 3500, category: "Food", image: "https://i.imgur.com/u5XpG6z.jpg" },
-                { id: 3, name: "လက်ဖက်ရည်", price: 1500, category: "Drink", image: "https://i.imgur.com/vH6v9S3.jpg" }
-            ],
+            menu: [],
             cart: [],
             orders: []
         };
 
         // Sync with Google Sheets
         async function syncWithGoogleSheets() {
-            if (!scriptURL.includes('https')) {
-                showNotification("Google App Script URL ထည့်ရန် လိုအပ်ပါသည်", "error");
-                return;
-            }
-
             const icon = document.getElementById('sync-icon');
-            icon.classList.add('animate-spin');
+            if (icon) icon.classList.add('animate-spin');
             
             try {
                 const response = await fetch(`${scriptURL}?action=getMenu`);
@@ -174,19 +164,18 @@
                     state.menu = data;
                     showNotification("Menu Update လုပ်ပြီးပါပြီ");
                     if (state.currentView === 'menu') renderMenu();
+                    else if (state.currentView === 'tables') renderTables();
                 }
             } catch (e) {
                 console.error(e);
                 showNotification("Sheet မှ Data ဆွဲ၍မရပါ", "error");
             } finally {
-                icon.classList.remove('animate-spin');
+                if (icon) icon.classList.remove('animate-spin');
             }
         }
 
         // Export Order to Google Sheets
         async function exportOrderToSheet(tableId, total, items) {
-            if (!scriptURL.includes('https')) return;
-
             const orderData = {
                 action: 'addOrder',
                 date: new Date().toLocaleString(),
@@ -335,7 +324,6 @@
             const combinedItems = getCombinedItems(activeOrders);
             const total = Object.values(combinedItems).reduce((s, i) => s + (i.price * i.qty), 0);
             
-            // Export data
             await exportOrderToSheet(tableId, total, Object.values(combinedItems));
             
             window.print();
@@ -350,22 +338,32 @@
 
         function renderMenu() {
             const main = document.getElementById('main-content');
-            let html = `<div class="p-4 grid grid-cols-2 gap-4 pb-48">`;
+            // 3 column grid with smaller gap for compact look
+            let html = `<div class="p-4 grid grid-cols-3 gap-3 pb-48">`;
             state.menu.forEach(item => {
                 html += `
-                <div class="bg-white rounded-2xl overflow-hidden shadow-sm border border-gray-100 p-2">
-                    <img src="${item.image}" class="h-24 w-full object-cover rounded-xl mb-2" onerror="this.src='https://via.placeholder.com/150'">
-                    <h3 class="font-bold text-xs truncate">${item.name}</h3>
-                    <p class="text-orange-600 font-black text-sm">${item.price} Ks</p>
-                    <button onclick="addToCart(${item.id})" class="w-full mt-2 bg-orange-50 text-orange-600 py-1 rounded-lg font-bold text-[10px]">+ ထည့်မည်</button>
+                <div class="bg-white rounded-xl overflow-hidden shadow-sm border border-gray-100 flex flex-col h-full">
+                    <!-- Square Image Container -->
+                    <div class="aspect-square w-full bg-gray-50 relative overflow-hidden">
+                        <img src="${item.image}" alt="${item.name}" class="absolute inset-0 w-full h-full object-cover" onerror="this.src='https://via.placeholder.com/150'">
+                    </div>
+                    <div class="p-2 flex flex-col flex-grow">
+                        <h3 class="font-bold text-[11px] leading-tight line-clamp-2 mb-1 h-8 text-gray-800">${item.name}</h3>
+                        <p class="text-orange-600 font-black text-xs mb-2">${item.price} Ks</p>
+                        <button onclick="addToCart(${item.id})" class="w-full mt-auto bg-orange-500 text-white py-1.5 rounded-lg font-bold text-[10px] active:scale-95 transition-transform shadow-sm">ထည့်မည်</button>
+                    </div>
                 </div>`;
             });
             html += `</div>`;
             if (state.cart.length > 0) {
                 const total = state.cart.reduce((s, i) => s + (i.price * i.qty), 0);
-                html += `<div class="fixed bottom-20 left-1/2 -translate-x-1/2 w-full max-w-4xl bg-white border-t p-4 shadow-2xl z-50">
-                    <button onclick="placeOrder()" class="w-full bg-orange-500 text-white py-4 rounded-2xl font-black uppercase tracking-wider shadow-lg">
-                        အော်ဒါတင်မည် - ${total.toLocaleString()} Ks
+                html += `<div class="fixed bottom-20 left-1/2 -translate-x-1/2 w-full max-w-4xl bg-white/95 backdrop-blur-sm border-t p-4 shadow-2xl z-50">
+                    <div class="flex items-center justify-between mb-3 px-2">
+                        <span class="text-xs font-bold text-gray-500">${state.cart.length} မျိုး ရွေးထားသည်</span>
+                        <span class="text-orange-600 font-black">${total.toLocaleString()} Ks</span>
+                    </div>
+                    <button onclick="placeOrder()" class="w-full bg-orange-500 text-white py-4 rounded-2xl font-black uppercase tracking-wider shadow-lg active:scale-[0.98] transition-all">
+                        အော်ဒါတင်မည်
                     </button>
                 </div>`;
             }
@@ -441,43 +439,3 @@
     </script>
 </body>
 </html>
-
-/* -------------------------------------------------------------
-  GOOGLE APPS SCRIPT CODE (Paste this in Apps Script Editor)
-  -------------------------------------------------------------
-
-  function doGet(e) {
-    var action = e.parameter.action;
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    
-    if (action == 'getMenu') {
-      var sheet = ss.getSheetByName('Menu') || ss.insertSheet('Menu');
-      if (sheet.getLastRow() < 1) {
-        // Sample header if empty
-        sheet.appendRow(['id', 'name', 'price', 'category', 'image']);
-      }
-      var data = sheet.getDataRange().getValues();
-      var headers = data.shift();
-      var result = data.map(function(row) {
-        var obj = {};
-        headers.forEach(function(h, i) { obj[h] = row[i]; });
-        return obj;
-      });
-      return ContentService.createTextOutput(JSON.stringify(result)).setMimeType(ContentService.MimeType.JSON);
-    }
-  }
-
-  function doPost(e) {
-    var ss = SpreadsheetApp.getActiveSpreadsheet();
-    var data = JSON.parse(e.postData.contents);
-    
-    if (data.action == 'addOrder') {
-      var sheet = ss.getSheetByName('Orders') || ss.insertSheet('Orders');
-      if (sheet.getLastRow() < 1) {
-        sheet.appendRow(['Date', 'Table', 'Items', 'Total']);
-      }
-      sheet.appendRow([data.date, data.table, data.items, data.total]);
-      return ContentService.createTextOutput("Success");
-    }
-  }
-*/
